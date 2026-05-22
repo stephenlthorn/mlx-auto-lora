@@ -1,0 +1,10 @@
+{"id": "q01", "prompt": "Write a SwiftUI view called ProfileCard that displays a user's name, an avatar image from a URL, and a bio. Use modern SwiftUI idioms."}
+{"id": "q02", "prompt": "Write a Swift function that fetches JSON from a URL using async/await and decodes it into a Codable struct named WeatherResponse. Include error handling."}
+{"id": "q03", "prompt": "Write a Swift actor named ImageCache that stores UIImage values by URL key and exposes async get and set methods."}
+{"id": "q04", "prompt": "Write a SwiftUI @Observable view model class for a counter with increment, decrement, and reset methods using the Observation framework."}
+{"id": "q05", "prompt": "Write a Swift extension on Array where Element: Numeric that adds a method `sum()` returning the total."}
+{"id": "q06", "prompt": "Write a Swift struct conforming to Identifiable and Codable representing a Workout with id, name, durationMinutes, and date."}
+{"id": "q07", "prompt": "Write a SwiftUI List that displays an array of Workout structs, each row showing the name and duration, with swipe-to-delete."}
+{"id": "q08", "prompt": "Write a Swift function using Swift 6 strict concurrency that runs three async tasks in parallel with async let and returns a tuple of results."}
+{"id": "q09", "prompt": "Write a SwiftUI modifier that applies a rounded rectangle background with a subtle shadow, as a reusable ViewModifier."}
+{"id": "q10", "prompt": "Write a Swift enum named LoadState with cases idle, loading, loaded(value), and failed(error) using generics and associated values."}

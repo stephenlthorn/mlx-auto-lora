@@ -1,0 +1,85 @@
+# mlx-auto-lora — the only file experiments mutate.
+#
+# Each run touches exactly one knob. `keep = git commit`, `revert = git
+# checkout`, so the working-tree state of this file IS the current best
+# configuration. results.tsv is the experiment log.
+
+# ── Base model + quantization ────────────────────────────────────────────────
+# Resolved by lab/model_paths.py against your local HuggingFace cache.
+# Add new models there or override with the `model_path:` key below.
+base_model: qwen3-30b-a3b
+quantization: mlx8
+# model_path: /absolute/path/to/local/mlx/model   # optional override
+
+# ── LoRA hyperparameters ──────────────────────────────────────────────────────
+# These are what the bandit perturbs. Defaults below are a known-safe starting
+# point on a 96GB M2 Ultra: ~33 GB peak training memory.
+lora:
+  rank: 16
+  alpha_over_rank: 4.0       # mlx-lm scale = alpha / rank
+  dropout: 0.05
+  num_layers: 4              # depth of LoRA injection; bigger = more memory
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+  # Adding gate_proj/up_proj/down_proj enables MLP LoRAs (more capacity,
+  # more memory). The bandit's H3-mlp hypothesis toggles this on/off.
+
+# ── Optimizer ─────────────────────────────────────────────────────────────────
+optim:
+  optimizer: adamw
+  lr: 0.0001
+  schedule: cosine
+  warmup_steps: 100
+  weight_decay: 0.0
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+data:
+  max_seq_length: 2048
+  mask_prompt: false
+  # mix_weights pick which slice loaders run. Each key matches a function in
+  # lab/prepare_data.py SLICE_BUILDERS. Value is the relative weight.
+  mix_weights:
+    local_repos: 1.0
+  # local_repos source dirs. Each entry: path, label, extensions.
+  # Replace with directories you actually want to learn from.
+  sources:
+    - path: ~/code/some-swift-project
+      label: SomeProject
+      extensions: [.swift]
+    # - path: ~/code/another-repo
+    #   label: AnotherRepo
+    #   extensions: [.swift, .h, .m]
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  batch_size: 1
+  grad_accumulation: 8
+  iters: 300
+  grad_checkpoint: true
+  seed: 42
+
+# ── Budget ────────────────────────────────────────────────────────────────────
+budget:
+  # Hard wall-clock ceiling. mlx-lm saves a checkpoint every save_every iters,
+  # so being cut off mid-run is acceptable — the most recent checkpoint is
+  # kept and evaluated.
+  max_wall_clock_min: 60
+
+# ── Eval (domain-pluggable) ──────────────────────────────────────────────────
+# `domain` picks a module under lab/domains/. Each domain provides:
+#   - compile(code: str) -> int|None         hard syntax gate (e.g. swiftc -parse)
+#   - lint(code: str) -> int|None            optional style gate
+#   - judge_system: str                      LLM-judge system prompt
+#   - extract_code(text: str) -> str         pull code out of model output
+#
+# Composite score weights `compile`, `lint`, and `judge` then renormalizes over
+# whichever components were measurable. Default weights are in eval.py.
+eval:
+  domain: swift                                              # see lab/domains/
+  prompts: lab/evals/quick_prompts.jsonl                     # held-out set
+  max_tokens: 1024
+  temperature: 0.4
+  top_p: 0.95

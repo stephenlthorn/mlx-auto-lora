@@ -1,0 +1,8 @@
+# Core: MLX LoRA training + tokenization
+mlx-lm>=0.20.0
+pyyaml>=6.0
+
+# Optional: Anthropic Claude as the LLM judge.
+# If unset (no ANTHROPIC_API_KEY), eval.py falls back to a neutral 0.5 judge
+# score and renormalizes the composite over the components it could measure.
+anthropic>=0.40.0

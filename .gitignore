@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Local env / secrets
+.env
+
+# Training artifacts (large binaries; not for git)
+adapters/
+
+# Corpus (regenerated from source dirs)
+corpus/
+
+# Logs (ephemeral)
+logs/
+
+# Lock and offset files
+jarvis.lock
+lab.lock
+lab/evals/*.json
+logs/tg_offset.txt
+
+# Local state (an example state.json is fine to commit; the live one is not)
+state.json
+
+# macOS
+.DS_Store
