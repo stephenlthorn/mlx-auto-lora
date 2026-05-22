@@ -75,32 +75,35 @@ The interesting part. Run `bin/mem_probe.sh` once with anything memory-hungry
 (model servers, browsers) closed; it does short 2-iter trainings across a
 grid of `(num_layers, max_seq_length)` combos and records peak GPU memory.
 
-Below is a representative envelope from a 96 GB M2 Ultra training Qwen3-30B
-at 8-bit, batch 1, gradient checkpointing on:
+After running it on a 96 GB M2 Ultra training a 30B 8-bit Qwen model with
+batch 1 and gradient checkpointing on, you'll get something shaped like
+this. **The exact numbers depend on your machine, model, and quantization**
+- this table is illustrative, not a promise:
 
 | num_layers | max_seq | result | peak GB |
 | ---------: | ------: | :----: | ------: |
-|          2 |    1024 |   OK   |    33.0 |
-|          4 |    1024 |   OK   |    41.8 |
-|          4 |    2048 |   OK   |    52.4 |
-|          8 |    1024 |   OK   |    58.7 |
-|          8 |    2048 |   OK   |    85.1 |
-|         12 |    1024 |   OK   |    71.2 |
+|          2 |    1024 |   OK   |    ~33  |
+|          4 |    1024 |   OK   |    ~42  |
+|          4 |    2048 |   OK   |    ~52  |
+|          8 |    1024 |   OK   |    ~59  |
+|          8 |    2048 |   OK   |    ~85  |
+|         12 |    1024 |   OK   |    ~71  |
 |         12 |    2048 |  OOM   |       - |
-|         16 |    2048 |  OOM   |       - |
 
-Two things to notice:
+Your real `logs/mem_envelope.tsv` is what the bandit reads. Two patterns
+that consistently show up:
 
-1. `(8, 2048)` peaks at 85 GB. That fits the nominal 96 GB *in isolation*
-   but reliably OOMs in real conditions when an inference server is up. The
-   default budget in `run_phase.py` is `PEAK_BUDGET_GB = 70` for this reason.
-   Override with `MLX_AUTO_LORA_PEAK_GB=80` if your machine is dedicated.
+1. A combo that peaks above ~70 GB on a 96 GB box will fit *in isolation*
+   but tend to OOM when an inference server is also up. The default
+   unattended budget in `run_phase.py` is `PEAK_BUDGET_GB = 70` for this
+   reason. Override with `MLX_AUTO_LORA_PEAK_GB=80` if your machine is
+   dedicated.
 
-2. The envelope is **not separable**. `num_layers=8` is safe and
-   `max_seq_length=2048` is safe, but `(8, 2048)` is unsafe. The bandit
-   refuses any combo unless some measured-feasible point dominates it on
-   both axes. This is the line in `run_phase.py:is_safe` and it's the
-   single most useful check in the whole thing.
+2. The envelope is **not separable**. Some `num_layers` value is safe and
+   some `max_seq_length` value is safe, but the combination isn't. The
+   bandit refuses any combo unless some measured-feasible point dominates
+   it on both axes. This is the line in `run_phase.py:is_safe` and it's
+   the single most useful check in the whole thing.
 
 `mem_probe.sh` regenerates the table any time you change the base model,
 the quantization, or you upgrade macOS / mlx-lm.
