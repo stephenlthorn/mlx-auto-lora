@@ -57,15 +57,23 @@ data:
 training:
   batch_size: 1
   grad_accumulation: 8
+  # IMPORTANT: iters must COMPLETE within budget.max_wall_clock_min. A run that
+  # hits the wall clock (completion_ratio < MIN_COMPLETION, default 0.95) is
+  # REJECTED as not-comparable — an under-trained checkpoint vs a fully-trained
+  # baseline is apples-to-oranges. Tune iters to your model + hardware so a run
+  # finishes with margin; otherwise the loop rejects everything and pauses.
+  # (e.g. a 27B mlx8 LoRA at ~13s/iter does ~200 iters in ~51 min under a
+  # 60-min ceiling. Bigger models / more num_layers => fewer iters or more budget.)
   iters: 300
   grad_checkpoint: true
   seed: 42
 
 # ── Budget ────────────────────────────────────────────────────────────────────
 budget:
-  # Hard wall-clock ceiling. mlx-lm saves a checkpoint every save_every iters,
-  # so being cut off mid-run is acceptable — the most recent checkpoint is
-  # kept and evaluated.
+  # Hard wall-clock ceiling. mlx-lm checkpoints every save_every iters and on
+  # SIGINT, so a stop is graceful — but a stop BEFORE reaching `iters` is
+  # treated as truncated and the run is rejected (see the note on iters above).
+  # Set this comfortably above the time `iters` takes on your slowest config.
   max_wall_clock_min: 60
 
 # ── Eval (domain-pluggable) ──────────────────────────────────────────────────
