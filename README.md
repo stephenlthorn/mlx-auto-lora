@@ -60,9 +60,13 @@ knobs on different axes** so interactions (e.g. rank + lr) can be found.
 
 A run is **kept** only when it clears two bars: the compile gate passes AND its
 composite beats the incumbent by more than the eval noise
-(`score > best + max(MIN_DELTA, NOISE_K · composite_std)`). Runs cut off by the
-wall clock (`completion_ratio < MIN_COMPLETION`) are rejected as
-not-comparable rather than scored as equals. Kept changes are committed and the
+(`score > best + max(MIN_DELTA, NOISE_K · composite_std/√n_prompts)`). The noise
+basis is the standard error of the mean — the spread of per-prompt scores
+divided by √n_prompts — because the test is whether the *mean* composite is
+reliably higher, and the mean tightens as you add prompts. (Using the raw
+per-prompt std would demand ~0.2 gains and reject real small wins as noise.)
+Runs cut off by the wall clock (`completion_ratio < MIN_COMPLETION`) are
+rejected as not-comparable rather than scored as equals. Kept changes are committed and the
 adapter moved to `adapters/keepers/`; otherwise the config is `git checkout`ed
 and the adapter deleted. Results append to `lab/results.tsv` either way. After
 `REVERT_EXPLORE_THRESHOLD` consecutive reverts the bandit biases toward untried
@@ -196,9 +200,11 @@ because one helper is missing is brittle; the JSON reports
 
 Because generation is stochastic, eval draws `--samples` completions per
 prompt (default 3) with seeds derived from `--seed`, and reports both
-`composite_score` and `composite_std`. The orchestrator uses that std as a
-**noise floor**: a candidate must beat the incumbent by more than the
-measured noise to be kept, so the loop stops chasing sampler jitter.
+`composite_score` and `composite_std`. The orchestrator converts that spread
+into a **noise floor** via the standard error of the mean
+(`composite_std/√n_prompts`): a candidate must beat the incumbent by more than
+that to be kept, so the loop stops chasing sampler jitter without setting an
+unreachable bar.
 
 Want a different judge (local model via mlx-lm, OpenAI, etc.)? Add a branch
 in `lab/eval.py:_judge_client`. The contract is one callable that takes

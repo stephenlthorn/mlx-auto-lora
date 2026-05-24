@@ -13,7 +13,7 @@ checkout) -> notify -> release lock.
 Keep/revert is deterministic and statistically honest:
   * compile is a hard GATE (a run that stops parsing is reverted outright);
   * a winner must beat the incumbent by more than the eval noise
-    (score > best + max(MIN_DELTA, NOISE_K * composite_std));
+    (score > best + max(MIN_DELTA, NOISE_K * composite_std/sqrt(n_prompts)));
   * runs cut off by the wall clock (completion_ratio < MIN_COMPLETION) are
     rejected as not-comparable rather than scored as equals.
 
@@ -591,8 +591,15 @@ def phase_experiment(forced_hyp: str | None) -> int:
             return 0
 
         # ── Fix: noise-floor keep/revert ─────────────────────────────────────
+        # The noise basis is the STANDARD ERROR OF THE MEAN composite
+        # (composite_std / sqrt(n_prompts)), not the raw per-prompt spread:
+        # we are testing whether the *mean* composite is reliably higher, and
+        # the mean's uncertainty shrinks with more prompts. Raw std would set
+        # an unreachable bar (~0.2) and reject genuine small gains as noise.
         best_state_score = float(state.get("best_score", -1.0))
-        noise_floor = max(MIN_DELTA, NOISE_K * composite_std)
+        n_prompts = int(res.get("n_prompts", 1)) or 1
+        sem = composite_std / math.sqrt(n_prompts)
+        noise_floor = max(MIN_DELTA, NOISE_K * sem)
         if score > best_state_score + noise_floor:
             KEEPERS.mkdir(parents=True, exist_ok=True)
             if adapter.exists():
@@ -605,7 +612,7 @@ def phase_experiment(forced_hyp: str | None) -> int:
             save_state(state)
             notify(
                 f"{desc}\nscore {score:.4f} (+{delta:.4f}) - NEW BEST\n"
-                f"noise_floor={noise_floor:.4f} (std={composite_std:.4f})\n"
+                f"noise_floor={noise_floor:.4f} (SEM={sem:.4f}, std={composite_std:.4f}, n={n_prompts})\n"
                 f"judge={res.get('judge_score')}",
                 "KEEP")
         else:
