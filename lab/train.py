@@ -3,8 +3,22 @@
 
 Translates lab/config.yaml into an mlx-lm LoRA YAML config, then runs training
 with a hard wall-clock ceiling. On timeout it sends SIGINT to mlx-lm, which
-saves whatever checkpoint it has, then exits successfully. The eval step
-scores that partial checkpoint - being cut off mid-run is fine.
+saves whatever checkpoint it has, then exits successfully.
+
+A checkpoint cut off mid-run is NOT equivalent to one that reached its iter
+target - comparing them is apples-to-oranges. So after training we write
+<adapter_dir>/train_meta.json so the orchestrator can detect (and reject)
+under-trained runs:
+
+    {
+      "run_id":               str,
+      "iters_target":         int,    # configured target
+      "iters_completed":      int,    # highest "Iter N" seen in mlx-lm stdout
+      "wall_clock_truncated": bool,   # True if the deadline cut it off
+      "elapsed_min":          float,
+      "adapter_saved":        bool,
+      "completion_ratio":     float   # iters_completed / iters_target, [0,1]
+    }
 
 The bandit only mutates config.yaml. This file (and eval.py) shouldn't need
 editing for experiments.
@@ -15,14 +29,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 import yaml
+
+# mlx-lm prints progress lines like "Iter 100: ...". Track the highest seen.
+_ITER_RE = re.compile(r"Iter\s+(\d+)")
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
@@ -48,6 +68,24 @@ _MODULE_TO_KEY = {
     "up_proj": "mlp.up_proj",
     "down_proj": "mlp.down_proj",
 }
+
+
+def _stdout_reader(proc: subprocess.Popen, last_iter: list[int]) -> None:
+    """Tee mlx-lm stdout to our stdout and track the highest 'Iter N' seen.
+
+    Runs in a daemon thread so the main loop keeps checking the wall-clock
+    deadline even if mlx-lm blocks between progress lines.
+    """
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        m = _ITER_RE.search(line)
+        if m:
+            try:
+                last_iter[0] = max(last_iter[0], int(m.group(1)))
+            except ValueError:
+                pass
 
 
 def build_mlx_config(cfg: dict, run_id: str, adapter_dir: Path,
@@ -140,12 +178,21 @@ def main() -> int:
     print(f"[train] adapter -> {adapter_dir}")
     print(f"[train] wall-clock ceiling: {args.max_wall_clock_min} min")
 
+    iters_target = int(mlx_cfg["iters"])
     cmd = [sys.executable, "-m", "mlx_lm", "lora", "--config", str(mlx_cfg_path)]
     deadline = time.time() + args.max_wall_clock_min * 60.0
     start = time.time()
-    proc = subprocess.Popen(cmd, cwd=str(ROOT))
+    # Capture stdout so a reader thread can track the highest completed iter
+    # while the main loop keeps enforcing the wall-clock deadline.
+    proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    last_iter = [0]
+    reader = threading.Thread(target=_stdout_reader, args=(proc, last_iter),
+                              daemon=True)
+    reader.start()
 
     rc: int | None = None
+    wall_clock_truncated = False
     try:
         while True:
             rc = proc.poll()
@@ -155,6 +202,7 @@ def main() -> int:
                 print(f"[train] wall-clock ceiling hit at "
                       f"{(time.time()-start)/60:.1f} min - terminating, "
                       f"keeping checkpoint")
+                wall_clock_truncated = True
                 proc.send_signal(signal.SIGINT)  # mlx-lm saves on interrupt
                 try:
                     proc.wait(timeout=120)
@@ -168,11 +216,33 @@ def main() -> int:
         proc.wait(timeout=120)
         rc = 130
 
+    reader.join(timeout=30)
     elapsed = (time.time() - start) / 60.0
     adapter_files = (list(adapter_dir.glob("*adapters*.safetensors")) +
                      list(adapter_dir.glob("adapters.safetensors")))
     ok = bool(adapter_files)
-    print(f"[train] done rc={rc} elapsed={elapsed:.1f}min adapter_saved={ok}")
+    iters_completed = last_iter[0]
+    completion_ratio = (round(min(1.0, iters_completed / iters_target), 3)
+                        if iters_target > 0 else 0.0)
+
+    # Machine-readable training metadata for the orchestrator's keep/revert.
+    meta = {
+        "run_id": args.run_id,
+        "iters_target": iters_target,
+        "iters_completed": iters_completed,
+        "wall_clock_truncated": wall_clock_truncated,
+        "elapsed_min": round(elapsed, 1),
+        "adapter_saved": ok,
+        "completion_ratio": completion_ratio,
+    }
+    try:
+        (adapter_dir / "train_meta.json").write_text(json.dumps(meta, indent=2))
+    except Exception as e:  # never fail the run over metadata
+        print(f"[train] warn: could not write train_meta.json: {e}", file=sys.stderr)
+
+    print(f"[train] done rc={rc} elapsed={elapsed:.1f}min adapter_saved={ok} "
+          f"iters={iters_completed}/{iters_target} "
+          f"truncated={wall_clock_truncated}")
     if not ok:
         print("[train] ERROR: no adapter file produced", file=sys.stderr)
         return 1

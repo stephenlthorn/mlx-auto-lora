@@ -28,3 +28,6 @@ state.json
 
 # macOS
 .DS_Store
+
+# Cached corpus variants built for data-mix experiments
+corpus_variants/

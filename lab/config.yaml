@@ -75,11 +75,19 @@ budget:
 #   - judge_system: str                      LLM-judge system prompt
 #   - extract_code(text: str) -> str         pull code out of model output
 #
-# Composite score weights `compile`, `lint`, and `judge` then renormalizes over
-# whichever components were measurable. Default weights are in eval.py.
+# compile is a GATE (compile_gate_pass), NOT a score weight — a base model
+# already emits parseable code, so scoring it just pins ~40% of the weight at
+# 1.0 and drowns the real signal. The composite is judge-driven:
+#   composite = judge                  (no linter)
+#             = 0.7*judge + 0.3*lint   (linter installed)
+# eval draws `samples` completions/prompt (seeded) and reports composite_std,
+# which the orchestrator uses as a keep/revert noise floor. Weights live in
+# eval.py (WEIGHTS); the judge runs at temperature 0.
 eval:
   domain: swift                                              # see lab/domains/
   prompts: lab/evals/quick_prompts.jsonl                     # held-out set
   max_tokens: 1024
-  temperature: 0.4
+  temperature: 0.4        # generation sampling temperature (not the judge)
   top_p: 0.95
+  # samples: 3            # completions per prompt (eval.py --samples; default 3)
+  # seed: 42              # base seed for reproducible generation

@@ -41,22 +41,33 @@ This repo is what I wish I'd had.
   ┌───────────────────────────┐
   │ lab/run_phase.py          │
   │  1. lock                  │
-  │  2. propose ONE hypothesis│   ← bandit, constrained to memory envelope
+  │  2. propose hypothesis    │   ← UCB1 bandit, memory-envelope constrained
   │  3. edit config.yaml      │
-  │  4. train.py (mlx-lm)     │   ← hard wall-clock budget
-  │  5. eval.py               │   ← compile + lint + LLM judge
+  │  4. train.py (mlx-lm)     │   ← hard wall-clock budget + completion check
+  │  5. eval.py               │   ← compile GATE, judge-driven composite ± std
   │  6. keep (git commit)     │     ─┐
   │     OR revert (checkout)  │      │  ← the working tree IS the
   │  7. notify, unlock        │     ─┘    current best config
   └───────────────────────────┘
 ```
 
-The bandit picks from a small menu of hypotheses (`H1-rank`, `H4-lr`,
-`H8-seq`, `H11-layers`, `Ha-alpha`, `Hd-dropout`, ...). Each EXPERIMENT
-mutates one knob in `lab/config.yaml`. If the new composite score is the
-best so far, the change is committed and the adapter moved to
-`adapters/keepers/`. Otherwise the config is `git checkout`ed and the
-adapter is deleted. The result is appended to `lab/results.tsv` either way.
+The bandit picks from a menu of hypotheses (`H1-rank`, `H4-lr`, `H8-seq`,
+`H11-layers`, `Ha-alpha`, `Hd-dropout`, `H3-mlp`, `Hm-mix`, ...) using **UCB1**
+over the observed composite scores: untried arms are explored first, then arms
+are ranked by mean reward plus an exploration bonus. Each EXPERIMENT builds on
+the current best config and mutates one knob — or, ~30% of the time, **two
+knobs on different axes** so interactions (e.g. rank + lr) can be found.
+
+A run is **kept** only when it clears two bars: the compile gate passes AND its
+composite beats the incumbent by more than the eval noise
+(`score > best + max(MIN_DELTA, NOISE_K · composite_std)`). Runs cut off by the
+wall clock (`completion_ratio < MIN_COMPLETION`) are rejected as
+not-comparable rather than scored as equals. Kept changes are committed and the
+adapter moved to `adapters/keepers/`; otherwise the config is `git checkout`ed
+and the adapter deleted. Results append to `lab/results.tsv` either way. After
+`REVERT_EXPLORE_THRESHOLD` consecutive reverts the bandit biases toward untried
+high-leverage axes (data mix, depth, MLP); after `REVERT_PAUSE_THRESHOLD` it
+pauses the loop and alerts.
 
 State that actually matters:
 
@@ -176,12 +187,18 @@ contributes more fitness signal than judge-only.
 ## The LLM judge
 
 If `ANTHROPIC_API_KEY` is set in `.env`, the judge calls Claude (defaults to
-Opus 4.7; override with `ANTHROPIC_JUDGE_MODEL`). Without it, the judge
-component is recorded `null` and the composite is **renormalized** over the
-components that *were* measured. This is deliberate - refusing to score
-because one helper is missing is brittle. A score with `measured_components:
-["compile", "lint"]` is still useful; the JSON reports which components
-contributed so you can audit.
+Opus 4.7; override with `ANTHROPIC_JUDGE_MODEL`) at **temperature 0** for
+repeatable grading. Compile is a **gate**, not a composite component, so the
+composite is `judge` alone (or `0.7·judge + 0.3·lint` when a linter is
+installed), renormalized over whatever was measurable. Refusing to score
+because one helper is missing is brittle; the JSON reports
+`measured_components` so you can audit.
+
+Because generation is stochastic, eval draws `--samples` completions per
+prompt (default 3) with seeds derived from `--seed`, and reports both
+`composite_score` and `composite_std`. The orchestrator uses that std as a
+**noise floor**: a candidate must beat the incumbent by more than the
+measured noise to be kept, so the loop stops chasing sampler jitter.
 
 Want a different judge (local model via mlx-lm, OpenAI, etc.)? Add a branch
 in `lab/eval.py:_judge_client`. The contract is one callable that takes
@@ -211,12 +228,13 @@ the cron job logs to `logs/cron.log`).
   but the memory envelope, the cron scheduling, and the launchd listener
   are all M-series shaped. On a GPU cluster you'd use Ray Tune.
 
-- **The bandit is dumb on purpose.** No Thompson sampling, no Bayesian
-  surrogate model. It picks an untried (hypothesis, value) pair uniformly
-  from those that pass the safety check, biases toward the menu, and stops
-  when everything has been tried. Spending compute on smarter selection
-  saves at most a few experiments per night - the bottleneck is the
-  hour-long train+eval cycle, not the picker.
+- **The bandit is simple on purpose.** It's UCB1 over the observed composite
+  scores (explore untried arms first, then mean reward + exploration bonus),
+  with ~30% two-axis compound proposals and convergence escalation - not a
+  Bayesian surrogate model or Thompson sampling. Spending compute on smarter
+  selection saves at most a few experiments per night; the bottleneck is the
+  hour-long train+eval cycle, not the picker. The point is that it *learns*
+  from past scores instead of sampling blind.
 
 - **Compile gate is the magic.** If your domain doesn't have a fast static
   checker, you get less discrimination, full stop. The framing is
